@@ -1,0 +1,7 @@
+train: /Users/sathsarasithum/Documents/GitHub/YOLOv8/train
+val: /Users/sathsarasithum/Documents/GitHub/YOLOv8/val
+
+# number of classes
+nc : 4
+
+names: ["yellow_hat","jacket","white_hat","blue_hat"]

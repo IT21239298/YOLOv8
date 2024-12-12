@@ -1,0 +1,4 @@
+yellow_hat
+jacket
+white_hat
+blue_hat
