@@ -5,20 +5,18 @@ import os
 from datetime import datetime
 
 class PersonTracker:
-    """
-    Class to track and maintain consistent IDs for people across video frames.
-    Uses appearance-based features for person re-identification.
-    """
     def __init__(self, max_disappeared=30, similarity_threshold=0.7):
-        # Initialize tracker variables
-        self.next_id = 1  # Start IDs from 1
-        self.persons = {}  # Dictionary to store person data
-        self.features_by_id = {}  # Store feature history for each ID
-        self.similarity_threshold = similarity_threshold  # Threshold for matching persons
-        self.active_persons = set()  # Track persons in current frame
-        self.total_unique = 0  # Counter for total unique persons
-        self.last_seen = {}  # Track when each person was last seen
-        self.confirmed_persons = set()  # Set of confirmed unique persons
+        self.next_id = 1
+        self.persons = {}
+        self.features_by_id = {}
+        self.similarity_threshold = similarity_threshold
+        self.active_persons = set()
+        self.last_seen = {}
+        self.confirmed_persons = set()
+        # New variables for better tracking
+        self.person_history = {}  # Store movement history
+        self.min_frames_to_confirm = 5  # Minimum frames to confirm as unique person
+        self.frame_counts = {}  # Track how many frames each ID has been seen
         
     def get_features(self, frame, box):
         """
@@ -40,25 +38,20 @@ class PersonTracker:
         return None
 
     def match_person(self, features, frame_count):
-        """
-        Match current detection with existing persons using feature similarity.
-        Args:
-            features: Extracted features from current detection
-            frame_count: Current frame number for tracking last seen
-        Returns:
-            Best matching person ID or None if no match found
-        """
+        """Enhanced matching with temporal consistency check"""
         best_match = None
         best_score = -1
 
-        # Only consider persons seen in the last 50 frames
+        # Consider only recently seen persons
         recent_persons = {pid: feats for pid, feats in self.features_by_id.items() 
                          if frame_count - self.last_seen.get(pid, 0) < 50}
 
         for person_id, stored_features in recent_persons.items():
-            # Compare current features with stored feature history
+            # Compare features
             score = cv2.compareHist(features, np.mean(stored_features, axis=0), 
                                   cv2.HISTCMP_CORREL)
+            
+            # Add temporal consistency check
             if score > self.similarity_threshold and score > best_score:
                 best_score = score
                 best_match = person_id
@@ -66,15 +59,7 @@ class PersonTracker:
         return best_match
 
     def update(self, frame, boxes, frame_count):
-        """
-        Update tracker with new detections in current frame.
-        Args:
-            frame: Current video frame
-            boxes: List of detection bounding boxes
-            frame_count: Current frame number
-        Returns:
-            List of tuples (person_id, box) for current detections
-        """
+        """Updated tracking method with better unique person confirmation"""
         self.active_persons.clear()
         current_detections = []
 
@@ -90,8 +75,8 @@ class PersonTracker:
                 person_id = self.next_id
                 self.next_id += 1
                 self.features_by_id[person_id] = []
-                self.total_unique += 1
-                self.confirmed_persons.add(person_id)
+                self.frame_counts[person_id] = 0
+                self.person_history[person_id] = []
 
             # Update feature history
             if person_id in self.features_by_id:
@@ -104,17 +89,47 @@ class PersonTracker:
             # Update tracking info
             self.active_persons.add(person_id)
             self.last_seen[person_id] = frame_count
+            self.frame_counts[person_id] = self.frame_counts.get(person_id, 0) + 1
+            
+            # Store position history
+            x_center = (box[0] + box[2]) / 2
+            y_center = (box[1] + box[3]) / 2
+            self.person_history[person_id].append((x_center, y_center))
+            
+            # Confirm as unique person if seen for enough frames
+            if (self.frame_counts[person_id] >= self.min_frames_to_confirm and 
+                person_id not in self.confirmed_persons):
+                # Check if movement pattern suggests a new person
+                if self._validate_unique_person(person_id):
+                    self.confirmed_persons.add(person_id)
+
             current_detections.append((person_id, box))
 
         return current_detections
+    
+    def _validate_unique_person(self, person_id):
+        """Validate if this is likely a unique person based on movement pattern"""
+        if len(self.person_history[person_id]) < self.min_frames_to_confirm:
+            return False
+            
+        # Calculate movement consistency
+        positions = np.array(self.person_history[person_id])
+        if len(positions) >= 2:
+            # Calculate total distance moved
+            distances = np.sqrt(np.sum(np.diff(positions, axis=0) ** 2, axis=1))
+            total_distance = np.sum(distances)
+            
+            # If person has moved significantly, more likely to be a real detection
+            return total_distance > 50  # Minimum movement threshold
+            
+        return False
 
     def get_counts(self):
-        """
-        Get current person counts.
-        Returns:
-            Tuple of (current_count, total_unique)
-        """
-        return len(self.active_persons), len(self.confirmed_persons)
+        """Get current and total unique person counts"""
+        # Only count persons as unique if they've been confirmed
+        current_count = len(self.active_persons)
+        total_unique = len(self.confirmed_persons)
+        return current_count, total_unique
 
 def get_color(idx):
     """
